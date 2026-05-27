@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+
+    if: |
+      startsWith(github.event.head_commit.message, 'release:') ||
+      startsWith(github.event.head_commit.message, 'release :') ||
+      startsWith(github.event.head_commit.message, 'major-release:') ||
+      startsWith(github.event.head_commit.message, 'major-release :') ||
+      startsWith(github.event.head_commit.message, 'minor-release:') ||
+      startsWith(github.event.head_commit.message, 'minor-release :')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck curl python3
+
+      - name: ShellCheck scripts
+        run: |
+          shellcheck check-updates.sh install.sh tests/run-real-local-test.sh
+
+      - name: Run real local CMS test
+        run: |
+          ./tests/run-real-local-test.sh
+
+      - name: Test installer without release
+        run: |
+          sudo ./install.sh
+
+          test -x /opt/tools/update-checks/check-updates.sh
+          test -f /opt/tools/update-checks/clients.conf
+          test -f /opt/tools/update-checks/settings.env
+          test -d /opt/tools/update-checks/logs
+          test -d /opt/tools/update-checks/reports
+          test -f /etc/cron.d/cms-update-checker
+
+      - name: Determine next version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          msg="${{ github.event.head_commit.message }}"
+
+          echo "Commit message: $msg"
+          echo "Existing GitHub releases:"
+          gh release list --limit 20 || true
+
+          latest_tag="$(
+            gh release list \
+              --limit 100 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '[.[] | select(.isDraft == false and .isPrerelease == false) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0]' \
+              || true
+          )"
+
+          echo "Latest release tag detected: ${latest_tag:-none}"
+
+          if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
+            next_tag="v1.0.0"
+          else
+            version="${latest_tag#v}"
+            IFS='.' read -r major minor patch <<< "$version"
+
+            if [[ "$msg" == release:* || "$msg" == release\ :* ]]; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [[ "$msg" == major-release:* || "$msg" == major-release\ :* ]]; then
+              minor=$((minor + 1))
+              patch=0
+            elif [[ "$msg" == minor-release:* || "$msg" == minor-release\ :* ]]; then
+              patch=$((patch + 1))
+            else
+              echo "No release trigger found."
+              exit 1
+            fi
+
+            next_tag="v${major}.${minor}.${patch}"
+          fi
+
+          echo "Next release: $next_tag"
+          echo "next_tag=$next_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build release package
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          tag="${{ steps.version.outputs.next_tag }}"
+          package_name="cms-update-checker-${tag}"
+
+          rm -rf dist
+          mkdir -p "dist/${package_name}"
+
+          cp install.sh "dist/${package_name}/install.sh"
+          cp check-updates.sh "dist/${package_name}/check-updates.sh"
+          cp README.md "dist/${package_name}/README.md"
+
+          printf '%s\n' "$tag" > "dist/${package_name}/VERSION"
+
+          chmod +x "dist/${package_name}/install.sh"
+          chmod +x "dist/${package_name}/check-updates.sh"
+
+          tar -C dist -czf "dist/${package_name}.tar.gz" "${package_name}"
+
+          cd dist
+          sha256sum "${package_name}.tar.gz" > checksums.txt
+
+          echo "Built release package:"
+          ls -lh
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.next_tag }}
+          name: ${{ steps.version.outputs.next_tag }}
+          body: |
+            Automated cms-update-checker release.
+
+            Commit message:
+
+            ${{ github.event.head_commit.message }}
+
+            Runtime files included:
+
+            - install.sh
+            - check-updates.sh
+            - README.md
+
+            Notes:
+
+            - This release package does not include local Docker test fixtures.
+            - Server installation can continue using the one-line raw installer.
+            - Release assets are provided for pinned/manual installation.
+          files: |
+            dist/cms-update-checker-${{ steps.version.outputs.next_tag }}.tar.gz
+            dist/checksums.txt
+
+      - name: Show debug info on failure
+        if: failure()
+        run: |
+          ls -lh dist || true
+          docker ps -a || true
+          docker logs real-drupal --tail=160 || true
+          docker logs real-wordpress --tail=160 || true
+          docker logs mailpit --tail=160 || true
+
+      - name: Clean up Docker containers
+        if: always()
+        run: |
+          docker compose down -v
