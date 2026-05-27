@@ -1,0 +1,12 @@
+# cms-update-checker config
+#
+# Format:
+# client|type|env|app_path|container|url
+#
+# type must be:
+# - drupal
+# - wordpress
+
+TEST-DRUPAL|drupal|local|/tmp/test-drupal|test-drupal|http://localhost/drupal
+TEST-WP|wordpress|local|/tmp/test-wordpress|test-wordpress|http://localhost/wordpress
+MISSING-DRUPAL|drupal|local|/tmp/missing|missing-drupal-container|http://localhost/missing

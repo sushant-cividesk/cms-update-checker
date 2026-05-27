@@ -1,0 +1,80 @@
+services:
+  real-drupal-db:
+    image: mariadb:10.11
+    container_name: real-drupal-db
+    environment:
+      MYSQL_DATABASE: drupal
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: drupal
+      MYSQL_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  real-drupal:
+    build:
+      context: ./local-dev/real-drupal
+    container_name: real-drupal
+    depends_on:
+      real-drupal-db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      DRUPAL_DB_HOST: real-drupal-db
+      DRUPAL_DB_PORT: 3306
+      DRUPAL_DB_NAME: drupal
+      DRUPAL_DB_USER: drupal
+      DRUPAL_DB_PASSWORD: drupal
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    ports:
+      - "8081:80"
+
+  real-wordpress-db:
+    image: mariadb:10.11
+    container_name: real-wordpress-db
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress
+      MYSQL_ROOT_PASSWORD: root
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  real-wordpress:
+    build:
+      context: ./local-dev/real-wordpress
+    container_name: real-wordpress
+    depends_on:
+      real-wordpress-db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      WORDPRESS_DB_HOST: real-wordpress-db
+      WORDPRESS_DB_PORT: 3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_SITE_URL: http://localhost:8082
+      WORDPRESS_SITE_TITLE: Local WordPress
+      WORDPRESS_ADMIN_USER: admin
+      WORDPRESS_ADMIN_PASSWORD: admin
+      WORDPRESS_ADMIN_EMAIL: admin@example.com
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    ports:
+      - "8082:80"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"

@@ -1,0 +1,7 @@
+reports/
+reports-real/
+logs/
+logs-real/
+*.log
+*.tmp
+.DS_Store

@@ -1,0 +1,44 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  real-local-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats curl python3
+
+      - name: ShellCheck scripts
+        run: |
+          shellcheck check-updates.sh install.sh tests/run-real-local-test.sh
+
+      - name: Run real local CMS test
+        run: |
+          ./tests/run-real-local-test.sh
+
+      - name: Show debug info on failure
+        if: failure()
+        run: |
+          ls -lh reports || true
+          latest_report="$(find reports -type f -name '*.txt' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -n 1 || true)"
+          if [ -n "$latest_report" ]; then
+            cat "$latest_report"
+          fi
+          docker ps -a || true
+          docker logs real-drupal --tail=160 || true
+          docker logs real-wordpress --tail=160 || true
+          docker logs mailpit --tail=160 || true
+
+      - name: Clean up Docker containers
+        if: always()
+        run: |
+          docker compose down -v

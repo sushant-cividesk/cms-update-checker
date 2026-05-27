@@ -1,0 +1,12 @@
+# cms-update-checker mail config
+#
+# Leave MAIL_TO empty to disable email.
+# For local Mailpit testing, use:
+# SMTP_HOST="127.0.0.1"
+# SMTP_PORT="1025"
+
+MAIL_TO=""
+MAIL_FROM="update-checker@localhost"
+
+SMTP_HOST=""
+SMTP_PORT=""
