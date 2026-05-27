@@ -1,31 +1,22 @@
-name: Release
+name: Test and Release
 
 on:
   push:
     branches:
       - main
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build and release
+  test:
+    name: Test
     runs-on: ubuntu-latest
-
-    if: |
-      startsWith(github.event.head_commit.message, 'release:') ||
-      startsWith(github.event.head_commit.message, 'release :') ||
-      startsWith(github.event.head_commit.message, 'major-release:') ||
-      startsWith(github.event.head_commit.message, 'major-release :') ||
-      startsWith(github.event.head_commit.message, 'minor-release:') ||
-      startsWith(github.event.head_commit.message, 'minor-release :')
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install test dependencies
         run: |
@@ -50,6 +41,78 @@ jobs:
           test -d /opt/tools/update-checks/logs
           test -d /opt/tools/update-checks/reports
           test -f /etc/cron.d/cms-update-checker
+
+          sudo cp config/clients.real-local.conf /opt/tools/update-checks/clients.conf
+
+          sudo tee /opt/tools/update-checks/settings.env >/dev/null <<'ENV'
+          MAIL_TO="ops@example.local"
+          MAIL_FROM="cms-update-checker@example.local"
+          SMTP_HOST="localhost"
+          SMTP_PORT="1025"
+          SMTP_USER=""
+          SMTP_PASSWORD=""
+          SMTP_TLS="0"
+          ENV
+
+          sudo bash -lc 'set -a; source /opt/tools/update-checks/settings.env; set +a; /opt/tools/update-checks/check-updates.sh'
+
+          test -n "$(find /opt/tools/update-checks/reports -type f -name '*.txt' | head -n 1)"
+
+      - name: Show debug info on failure
+        if: failure()
+        run: |
+          echo "Local reports:"
+          ls -lh reports || true
+
+          latest_report="$(find reports -type f -name '*.txt' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null | head -n 1 || true)"
+          if [ -n "$latest_report" ]; then
+            cat "$latest_report"
+          fi
+
+          echo "Installed files:"
+          sudo ls -lah /opt/tools/update-checks || true
+          sudo cat /etc/cron.d/cms-update-checker || true
+
+          echo "Docker containers:"
+          docker ps -a || true
+
+          echo "Drupal logs:"
+          docker logs real-drupal --tail=160 || true
+
+          echo "WordPress logs:"
+          docker logs real-wordpress --tail=160 || true
+
+          echo "Mailpit logs:"
+          docker logs mailpit --tail=160 || true
+
+      - name: Clean up Docker containers
+        if: always()
+        run: |
+          docker compose down -v
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs:
+      - test
+
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        startsWith(github.event.head_commit.message, 'release:') ||
+        startsWith(github.event.head_commit.message, 'release :') ||
+        startsWith(github.event.head_commit.message, 'major-release:') ||
+        startsWith(github.event.head_commit.message, 'major-release :') ||
+        startsWith(github.event.head_commit.message, 'minor-release:') ||
+        startsWith(github.event.head_commit.message, 'minor-release :')
+      )
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Determine next version
         id: version
@@ -149,23 +212,16 @@ jobs:
 
             Notes:
 
-            - This release package does not include local Docker test fixtures.
-            - Server installation can continue using the one-line raw installer.
-            - Release assets are provided for pinned/manual installation.
+            - Tests passed before this release was created.
+            - Release package contains only runtime files.
+            - Local Docker test fixtures are not included in the release asset.
+            - Server installation can use the one-line raw installer from main or the release asset.
           files: |
             dist/cms-update-checker-${{ steps.version.outputs.next_tag }}.tar.gz
             dist/checksums.txt
 
-      - name: Show debug info on failure
+      - name: Show release debug info on failure
         if: failure()
         run: |
-          ls -lh dist || true
-          docker ps -a || true
-          docker logs real-drupal --tail=160 || true
-          docker logs real-wordpress --tail=160 || true
-          docker logs mailpit --tail=160 || true
-
-      - name: Clean up Docker containers
-        if: always()
-        run: |
-          docker compose down -v
+          ls -lah dist || true
+          gh release list --limit 20 || true
