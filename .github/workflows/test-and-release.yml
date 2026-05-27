@@ -7,7 +7,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install test dependencies
         run: |
@@ -96,6 +96,9 @@ jobs:
     needs:
       - test
 
+    permissions:
+      contents: write
+
     if: |
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
@@ -110,7 +113,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -192,36 +195,46 @@ jobs:
           echo "Built release package:"
           ls -lh
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.next_tag }}
-          name: ${{ steps.version.outputs.next_tag }}
-          body: |
-            Automated cms-update-checker release.
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
 
-            Commit message:
+          tag="${{ steps.version.outputs.next_tag }}"
 
-            ${{ github.event.head_commit.message }}
+          cat > release-notes.md <<EOF_NOTES
+          Automated cms-update-checker release.
 
-            Runtime files included:
+          Commit message:
 
-            - install.sh
-            - check-updates.sh
-            - README.md
+          ${{ github.event.head_commit.message }}
 
-            Notes:
+          Runtime files included:
 
-            - Tests passed before this release was created.
-            - Release package contains only runtime files.
-            - Local Docker test fixtures are not included in the release asset.
-            - Server installation can use the one-line raw installer from main or the release asset.
-          files: |
-            dist/cms-update-checker-${{ steps.version.outputs.next_tag }}.tar.gz
-            dist/checksums.txt
+          - install.sh
+          - check-updates.sh
+          - README.md
+
+          Notes:
+
+          - Tests passed before this release was created.
+          - Release package contains only runtime files.
+          - Local Docker test fixtures are not included in the release asset.
+          - Server installation can use the one-line raw installer from main or the release asset.
+          EOF_NOTES
+
+          gh release create "$tag" \
+            --title "$tag" \
+            --notes-file release-notes.md \
+            "dist/cms-update-checker-${tag}.tar.gz" \
+            "dist/checksums.txt"
 
       - name: Show release debug info on failure
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           ls -lah dist || true
           gh release list --limit 20 || true
