@@ -105,21 +105,20 @@ client|type|env|app_path|container|url
 Example:
 
 ```text
-abc|drupal|prod|/home/docker/apps/abc|abc-prod|https://abc.org
-xyz|drupal|prod|/home/docker/apps/xyz|xyz-prod|https://xyz.org
-EXAMPLEWP|wordpress|prod|/home/docker/apps/examplewp|examplewp-prod|https://example.org
+EXAMPLE-DRUPAL|drupal|prod|/home/docker/apps/example-drupal|example-drupal-prod|https://drupal.example.org
+EXAMPLE-WORDPRESS|wordpress|prod|/home/docker/apps/example-wordpress|example-wordpress-prod|https://wordpress.example.org
 ```
 
 Fields:
 
 | Field | Description | Example |
 |---|---|---|
-| `client` | Client or site name | `WFSB` |
+| `client` | Client or site name | `EXAMPLE-DRUPAL` |
 | `type` | CMS type | `drupal` or `wordpress` |
 | `env` | Environment name | `prod` |
-| `app_path` | App path on host | `/home/docker/apps/wfsb` |
-| `container` | Docker container name | `wfsb-prod` |
-| `url` | Site URL | `https://womensfundsb.org` |
+| `app_path` | App path on host | `/home/docker/apps/example-drupal` |
+| `container` | Docker container name | `example-drupal-prod` |
+| `url` | Site URL | `https://drupal.example.org` |
 
 ## Configure Email
 
@@ -283,7 +282,11 @@ Real local test complete.
 
 ## GitHub Actions
 
-The workflow runs the real local test.
+The workflow runs as a multi-stage action.
+
+### Test Stage
+
+The test stage runs on every push to `main` and on pull requests.
 
 It verifies:
 
@@ -297,6 +300,125 @@ It verifies:
 - WordPress test email reaches Mailpit
 - The installer creates `/opt/tools/update-checks`
 - The installer creates `/etc/cron.d/cms-update-checker`
+
+### Release Stage
+
+The release stage runs only after the test stage passes.
+
+It runs only on pushes to `main` when the commit message starts with one of these prefixes:
+
+| Commit prefix | Version bump |
+|---|---|
+| `release:` | Major version bump |
+| `major-release:` | Minor version bump |
+| `minor-release:` | Patch version bump |
+
+Example release commits:
+
+```bash
+git commit --allow-empty -m "minor-release: update installer"
+git push
+```
+
+```bash
+git commit --allow-empty -m "release: initial stable release"
+git push
+```
+
+Normal commits do not create a release.
+
+Example normal commit:
+
+```bash
+git commit -m "Update README"
+git push
+```
+
+The release package includes only runtime files:
+
+```text
+install.sh
+check-updates.sh
+README.md
+VERSION
+```
+
+Local Docker test fixtures are not included in the release package.
+
+## Recommended Release Flow
+
+Before creating a release, make sure the normal test workflow is passing.
+
+Then create a release commit:
+
+```bash
+git commit --allow-empty -m "release: initial stable release"
+git push
+```
+
+The GitHub workflow will:
+
+1. Run the full test stage.
+2. Stop if tests fail.
+3. Determine the next version.
+4. Build the release package.
+5. Create the GitHub release.
+6. Upload the release tarball and checksum file.
+
+## First Server Rollout
+
+After the release is created and tests are passing, start with one server and one or two configured containers.
+
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sushant-cividesk/cms-update-checker/main/install.sh | sudo bash
+```
+
+Edit clients:
+
+```bash
+sudo nano /opt/tools/update-checks/clients.conf
+```
+
+Use generic format:
+
+```text
+EXAMPLE-DRUPAL|drupal|prod|/home/docker/apps/example-drupal|example-drupal-prod|https://drupal.example.org
+EXAMPLE-WORDPRESS|wordpress|prod|/home/docker/apps/example-wordpress|example-wordpress-prod|https://wordpress.example.org
+```
+
+Edit mail settings:
+
+```bash
+sudo nano /opt/tools/update-checks/settings.env
+```
+
+Run manually:
+
+```bash
+sudo bash -lc 'set -a; source /opt/tools/update-checks/settings.env; set +a; /opt/tools/update-checks/check-updates.sh'
+```
+
+Check generated reports:
+
+```bash
+sudo ls -lt /opt/tools/update-checks/reports | head
+```
+
+Check cron file:
+
+```bash
+sudo cat /etc/cron.d/cms-update-checker
+```
+
+Check cron log after the scheduled run:
+
+```bash
+sudo tail -n 100 /opt/tools/update-checks/logs/cron.log
+```
+
+Once the manual report and email look correct, add the remaining containers to `clients.conf`.
 
 ## Troubleshooting
 
