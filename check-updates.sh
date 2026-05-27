@@ -9,7 +9,7 @@ REPORT_DIR="${REPORT_DIR:-$BASE_DIR/reports}"
 LOG_DIR="${LOG_DIR:-$BASE_DIR/logs}"
 
 MAIL_TO="${MAIL_TO:-}"
-MAIL_FROM="${MAIL_FROM:-cms-update-checker@example.local}"
+MAIL_FROM="${MAIL_FROM:-cms-update-checker@example.org}"
 SMTP_HOST="${SMTP_HOST:-}"
 SMTP_PORT="${SMTP_PORT:-25}"
 SMTP_USER="${SMTP_USER:-}"
@@ -40,7 +40,7 @@ container_exists() {
 write_header() {
   {
     echo "Drupal/WordPress Update Check Report"
-    echo "================================================"
+    echo "===================================="
     echo "Host: $HOST"
     echo "Date: $DATE"
     echo "Mode: CHECK ONLY / DRY RUN"
@@ -78,7 +78,7 @@ check_drupal() {
     echo ""
     echo "Current Drupal/core packages:"
     echo "-----------------------------"
-    run_in_container "$container" "cd /var/www/html && composer show 'drupal/core-*'"
+    run_in_container "$container" "cd /var/www/html && COMPOSER_CACHE_DIR=/tmp/composer-cache composer show 'drupal/core-*'"
 
     echo ""
     echo "Drush status:"
@@ -88,7 +88,7 @@ check_drupal() {
     echo ""
     echo "Composer dry-run for Drupal core:"
     echo "---------------------------------"
-    run_in_container "$container" "cd /var/www/html && composer update 'drupal/core-*' --with-all-dependencies --dry-run"
+    run_in_container "$container" "cd /var/www/html && COMPOSER_CACHE_DIR=/tmp/composer-cache composer update 'drupal/core-*' --with-all-dependencies --dry-run"
 
     echo ""
     echo "Pending DB updates:"
@@ -98,7 +98,7 @@ check_drupal() {
     echo ""
     echo "Composer audit summary:"
     echo "-----------------------"
-    run_in_container "$container" "cd /var/www/html && composer audit || true"
+    run_in_container "$container" "cd /var/www/html && COMPOSER_CACHE_DIR=/tmp/composer-cache composer audit || true"
   } >> "$REPORT_FILE"
 }
 
@@ -162,53 +162,53 @@ send_report() {
     return
   fi
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "Email not sent: python3 is not available." >> "$REPORT_FILE"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Email not sent: curl is not available." >> "$REPORT_FILE"
     return
   fi
 
-  MAIL_TO="$MAIL_TO" \
-  MAIL_FROM="$MAIL_FROM" \
-  MAIL_SUBJECT="$MAIL_SUBJECT" \
-  SMTP_HOST="$SMTP_HOST" \
-  SMTP_PORT="$SMTP_PORT" \
-  SMTP_USER="$SMTP_USER" \
-  SMTP_PASSWORD="$SMTP_PASSWORD" \
-  SMTP_TLS="$SMTP_TLS" \
-  REPORT_FILE="$REPORT_FILE" \
-  python3 - <<'PY'
-import os
-import smtplib
-from email.message import EmailMessage
+  local email_file
+  email_file="$(mktemp)"
 
-mail_to = os.environ["MAIL_TO"]
-mail_from = os.environ["MAIL_FROM"]
-subject = os.environ["MAIL_SUBJECT"]
-smtp_host = os.environ["SMTP_HOST"]
-smtp_port = int(os.environ["SMTP_PORT"])
-smtp_user = os.environ.get("SMTP_USER", "")
-smtp_password = os.environ.get("SMTP_PASSWORD", "")
-smtp_tls = os.environ.get("SMTP_TLS", "0") == "1"
-report_file = os.environ["REPORT_FILE"]
+  {
+    echo "From: $MAIL_FROM"
+    echo "To: $MAIL_TO"
+    echo "Subject: $MAIL_SUBJECT"
+    echo "Date: $(date -R)"
+    echo "MIME-Version: 1.0"
+    echo "Content-Type: text/plain; charset=UTF-8"
+    echo ""
+    cat "$REPORT_FILE"
+  } > "$email_file"
 
-with open(report_file, "r", encoding="utf-8") as handle:
-    body = handle.read()
+  local smtp_url
+  smtp_url="smtp://$SMTP_HOST:$SMTP_PORT"
 
-msg = EmailMessage()
-msg["From"] = mail_from
-msg["To"] = mail_to
-msg["Subject"] = subject
-msg.set_content(body)
+  local curl_args
+  curl_args=(
+    --silent
+    --show-error
+    --url "$smtp_url"
+    --mail-from "$MAIL_FROM"
+    --mail-rcpt "$MAIL_TO"
+    --upload-file "$email_file"
+  )
 
-with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
-    if smtp_tls:
-        smtp.starttls()
-    if smtp_user:
-        smtp.login(smtp_user, smtp_password)
-    smtp.send_message(msg)
-PY
+  if [[ "$SMTP_TLS" == "1" ]]; then
+    curl_args+=(--ssl-reqd)
+  fi
 
-  echo "Email sent to $MAIL_TO via $SMTP_HOST:$SMTP_PORT" >> "$REPORT_FILE"
+  if [[ -n "$SMTP_USER" ]]; then
+    curl_args+=(--user "$SMTP_USER:$SMTP_PASSWORD")
+  fi
+
+  if curl "${curl_args[@]}"; then
+    echo "Email sent to $MAIL_TO via $SMTP_HOST:$SMTP_PORT" >> "$REPORT_FILE"
+  else
+    echo "Email failed to send to $MAIL_TO via $SMTP_HOST:$SMTP_PORT" >> "$REPORT_FILE"
+  fi
+
+  rm -f "$email_file"
 }
 
 if [[ ! -f "$CLIENTS_FILE" ]]; then
